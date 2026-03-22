@@ -1,0 +1,42 @@
+{
+  "name": "multisource-financial-statement",
+  "version": "1.0.0",
+  "description": "This tool normalizes the financial statement data accross different supported market in a comprehensive format",
+  "main": "server.ts",
+  "scripts": {
+    "start": "tsx server.ts",
+    "dev": "tsx watch server.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anointingbabajide/multi-source-financial-statements.git"
+  },
+  "keywords": [
+    "mcp",
+    "financial-statement",
+    "mcp-tool"
+  ],
+  "author": "Anointing Babajide",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/anointingbabajide/multi-source-financial-statements/issues"
+  },
+  "homepage": "https://github.com/anointingbabajide/multi-source-financial-statements#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@types/node": "^25.5.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/redis": "^4.0.10",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "ioredis": "^5.10.1",
+    "node-cron": "^4.2.1",
+    "redis": "^5.11.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6"
+  }
+}
