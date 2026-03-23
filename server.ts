@@ -1,8 +1,11 @@
 import "dotenv/config";
 import express, { Request, Response } from "express";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { z } from "zod";
+import {
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import router from "./src/routes/index";
 import { startCronJob } from "./src/jobs/nightly";
 import { fetchFinancialReport } from "./src/services/edgar";
@@ -13,68 +16,101 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 app.use(express.json());
-
-// REST API routes
 app.use("/api", router);
 
-// MCP endpoint
-app.post("/mcp", async (req: Request, res: Response) => {
-  try {
-    const server = new McpServer({
-      name: "multisource-financial-statements",
-      version: "1.0.0",
-    });
-
-    // Tool 1 - get financials for a single company
-    server.tool(
-      "get_financials",
-      "Get normalized financial statements for any US public company. Returns balance sheet, income statement, and cash flow data from SEC EDGAR. Replaces Bloomberg Terminal at $0.10 per query.",
-      {
-        ticker: z
-          .string()
-          .describe("Stock ticker symbol e.g. AAPL, MSFT, GOOGL, TSLA"),
-        formType: z
-          .enum(["10-K", "10-Q"])
-          .optional()
-          .default("10-K")
-          .describe("10-K for annual data, 10-Q for most recent quarter"),
+const TOOLS = [
+  {
+    name: "get_financials",
+    description:
+      "Get normalized financial statements for any US public company. Returns balance sheet, income statement, and cash flow data from SEC EDGAR.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ticker: {
+          type: "string",
+          description: "Stock ticker e.g. AAPL, MSFT, GOOGL, TSLA",
+        },
+        formType: {
+          type: "string",
+          enum: ["10-K", "10-Q"],
+          description: "10-K for annual, 10-Q for quarterly. Defaults to 10-K",
+        },
       },
-      async ({ ticker, formType }) => {
-        const identifier = ticker.toUpperCase();
-        const form = formType ?? "10-K";
-        const cacheKey = `financials:${identifier}:${form}`;
-
-        const cached = await getCache(cacheKey);
-        if (cached) {
-          return {
-            content: [{ type: "text", text: JSON.stringify(cached, null, 2) }],
-          };
-        }
-
-        const rawData = await fetchFinancialReport(identifier);
-        const normalized = normalizeEDGARData(rawData, form);
-        await setCache(cacheKey, normalized, 86400);
-
-        return {
-          content: [
-            { type: "text", text: JSON.stringify(normalized, null, 2) },
-          ],
-        };
+      required: ["ticker"],
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        company: { type: "string" },
+        cik: { type: "string" },
+        currency: { type: "string" },
+        period: { type: "string" },
+        filing_type: { type: "string" },
+        filed_at: { type: "string" },
+        financials: {
+          type: "object",
+          properties: {
+            income_statement: {
+              type: "object",
+              properties: {
+                revenue: { type: ["number", "null"] },
+                gross_profit: { type: ["number", "null"] },
+                operating_income: { type: ["number", "null"] },
+                net_income: { type: ["number", "null"] },
+              },
+            },
+            balance_sheet: {
+              type: "object",
+              properties: {
+                total_assets: { type: ["number", "null"] },
+                total_liabilities: { type: ["number", "null"] },
+                total_equity: { type: ["number", "null"] },
+              },
+            },
+            cash_flow: {
+              type: "object",
+              properties: {
+                operating_cash_flow: { type: ["number", "null"] },
+                capital_expenditure: { type: ["number", "null"] },
+                free_cash_flow: { type: ["number", "null"] },
+              },
+            },
+          },
+        },
+        yoy_changes: {
+          type: "object",
+          properties: {
+            revenue_pct: { type: ["number", "null"] },
+            net_income_pct: { type: ["number", "null"] },
+          },
+        },
       },
-    );
-
-    // Tool 2 - compare metric across multiple companies
-    server.tool(
-      "get_financials_comparison",
+      required: [
+        "company",
+        "cik",
+        "currency",
+        "period",
+        "filing_type",
+        "filed_at",
+        "financials",
+      ],
+    },
+  },
+  {
+    name: "get_financials_comparison",
+    description:
       "Compare a specific financial metric across multiple US public companies in one call. Useful for competitive analysis and benchmarking.",
-      {
-        tickers: z
-          .array(z.string())
-          .describe(
-            "Array of ticker symbols to compare e.g. ['AAPL', 'MSFT', 'GOOGL']",
-          ),
-        metric: z
-          .enum([
+    inputSchema: {
+      type: "object",
+      properties: {
+        tickers: {
+          type: "array",
+          items: { type: "string" },
+          description: "Array of tickers e.g. ['AAPL', 'MSFT', 'GOOGL']",
+        },
+        metric: {
+          type: "string",
+          enum: [
             "revenue",
             "gross_profit",
             "operating_income",
@@ -84,10 +120,85 @@ app.post("/mcp", async (req: Request, res: Response) => {
             "total_equity",
             "operating_cash_flow",
             "free_cash_flow",
-          ])
-          .describe("The financial metric to compare across all companies"),
+          ],
+          description: "The financial metric to compare across all companies",
+        },
       },
-      async ({ tickers, metric }) => {
+      required: ["tickers", "metric"],
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        metric: { type: "string" },
+        results: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              ticker: { type: "string" },
+              company: { type: "string" },
+              cik: { type: "string" },
+              period: { type: "string" },
+              filing_type: { type: "string" },
+              filed_at: { type: "string" },
+              currency: { type: "string" },
+              metric: { type: "string" },
+              value: { type: ["number", "null"] },
+              yoy_pct: { type: ["number", "null"] },
+              error: { type: "string" },
+            },
+            required: ["ticker"],
+          },
+        },
+      },
+      required: ["metric", "results"],
+    },
+  },
+];
+
+app.post("/mcp", async (req: Request, res: Response) => {
+  try {
+    const server = new Server(
+      { name: "multisource-financial-statements", version: "1.0.0" },
+      { capabilities: { tools: {} } },
+    );
+
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: TOOLS,
+    }));
+
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const { name, arguments: args } = request.params;
+
+      if (name === "get_financials") {
+        const ticker = (args?.ticker as string).toUpperCase();
+        const formType = (args?.formType as string) ?? "10-K";
+        const cacheKey = `financials:${ticker}:${formType}`;
+
+        const cached = await getCache(cacheKey);
+        if (cached) {
+          return {
+            content: [{ type: "text", text: JSON.stringify(cached, null, 2) }],
+            structuredContent: cached,
+          };
+        }
+
+        const rawData = await fetchFinancialReport(ticker);
+        const normalized = normalizeEDGARData(rawData, formType);
+        await setCache(cacheKey, normalized, 86400);
+
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(normalized, null, 2) },
+          ],
+          structuredContent: normalized,
+        };
+      }
+
+      if (name === "get_financials_comparison") {
+        const tickers = args?.tickers as string[];
+        const metric = args?.metric as string;
+
         const results = await Promise.allSettled(
           tickers.map(async (ticker) => {
             const identifier = ticker.toUpperCase();
@@ -129,7 +240,10 @@ app.post("/mcp", async (req: Request, res: Response) => {
           return {
             ticker,
             company: data.company,
+            cik: data.cik,
             period: data.period,
+            filing_type: data.filing_type,
+            filed_at: data.filed_at,
             currency: data.currency,
             metric,
             value: valueMap[metric] ?? null,
@@ -142,21 +256,20 @@ app.post("/mcp", async (req: Request, res: Response) => {
           };
         });
 
+        const output = { metric, results: comparison };
+
         return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ metric, results: comparison }, null, 2),
-            },
-          ],
+          content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+          structuredContent: output,
         };
-      },
-    );
+      }
+
+      throw new Error(`Unknown tool: ${name}`);
+    });
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });
-
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   } catch (error) {
