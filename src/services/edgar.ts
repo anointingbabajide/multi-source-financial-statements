@@ -30,8 +30,6 @@ const fetchWithRetry = async (
 
 const getCIKFromTicker = async (ticker: string): Promise<string> => {
   try {
-    // const { getCache, setCache } = await import("../utils/cache");
-
     let tickerMap = await getCache("sec:ticker_map");
 
     if (!tickerMap) {

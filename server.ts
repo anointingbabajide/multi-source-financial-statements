@@ -11,6 +11,7 @@ import { startCronJob } from "./src/jobs/nightly";
 import { fetchFinancialReport } from "./src/services/edgar";
 import { normalizeEDGARData } from "./src/normalizers/edgar";
 import { getCache, setCache } from "./src/utils/cache";
+import { createContextMiddleware } from "@ctxprotocol/sdk";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -156,133 +157,139 @@ const TOOLS = [
   },
 ];
 
-app.post("/mcp", async (req: Request, res: Response) => {
-  try {
-    const server = new Server(
-      { name: "multisource-financial-statements", version: "1.0.0" },
-      { capabilities: { tools: {} } },
-    );
+app.post(
+  "/mcp",
+  createContextMiddleware(),
+  async (req: Request, res: Response) => {
+    try {
+      const server = new Server(
+        { name: "multisource-financial-statements", version: "1.0.0" },
+        { capabilities: { tools: {} } },
+      );
 
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: TOOLS,
-    }));
+      server.setRequestHandler(ListToolsRequestSchema, async () => ({
+        tools: TOOLS,
+      }));
 
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
+      server.setRequestHandler(CallToolRequestSchema, async (request) => {
+        const { name, arguments: args } = request.params;
 
-      if (name === "get_financials") {
-        const ticker = (args?.ticker as string).toUpperCase();
-        const formType = (args?.formType as string) ?? "10-K";
-        const cacheKey = `financials:${ticker}:${formType}`;
+        if (name === "get_financials") {
+          const ticker = (args?.ticker as string).toUpperCase();
+          const formType = (args?.formType as string) ?? "10-K";
+          const cacheKey = `financials:${ticker}:${formType}`;
 
-        const cached = await getCache(cacheKey);
-        if (cached) {
-          return {
-            content: [{ type: "text", text: JSON.stringify(cached, null, 2) }],
-            structuredContent: cached,
-          };
-        }
-
-        const rawData = await fetchFinancialReport(ticker);
-        const normalized = normalizeEDGARData(rawData, formType);
-        await setCache(cacheKey, normalized, 86400);
-
-        return {
-          content: [
-            { type: "text", text: JSON.stringify(normalized, null, 2) },
-          ],
-          structuredContent: normalized,
-        };
-      }
-
-      if (name === "get_financials_comparison") {
-        const tickers = args?.tickers as string[];
-        const metric = args?.metric as string;
-
-        const results = await Promise.allSettled(
-          tickers.map(async (ticker) => {
-            const identifier = ticker.toUpperCase();
-            const cacheKey = `financials:${identifier}:10-K`;
-
-            const cached = await getCache(cacheKey);
-            if (cached) return { ticker: identifier, data: cached };
-
-            const rawData = await fetchFinancialReport(identifier);
-            const normalized = normalizeEDGARData(rawData, "10-K");
-            await setCache(cacheKey, normalized, 86400);
-            return { ticker: identifier, data: normalized };
-          }),
-        );
-
-        const comparison = results.map((result, index) => {
-          if (result.status === "rejected") {
+          const cached = await getCache(cacheKey);
+          if (cached) {
             return {
-              ticker: tickers[index].toUpperCase(),
-              error: result.reason?.message,
+              content: [
+                { type: "text", text: JSON.stringify(cached, null, 2) },
+              ],
+              structuredContent: cached,
             };
           }
 
-          const { ticker, data } = result.value;
-          const f = data.financials;
-
-          const valueMap: Record<string, number | null> = {
-            revenue: f.income_statement.revenue,
-            gross_profit: f.income_statement.gross_profit,
-            operating_income: f.income_statement.operating_income,
-            net_income: f.income_statement.net_income,
-            total_assets: f.balance_sheet.total_assets,
-            total_liabilities: f.balance_sheet.total_liabilities,
-            total_equity: f.balance_sheet.total_equity,
-            operating_cash_flow: f.cash_flow.operating_cash_flow,
-            free_cash_flow: f.cash_flow.free_cash_flow,
-          };
+          const rawData = await fetchFinancialReport(ticker);
+          const normalized = normalizeEDGARData(rawData, formType);
+          await setCache(cacheKey, normalized, 86400);
 
           return {
-            ticker,
-            company: data.company,
-            cik: data.cik,
-            period: data.period,
-            filing_type: data.filing_type,
-            filed_at: data.filed_at,
-            currency: data.currency,
-            metric,
-            value: valueMap[metric] ?? null,
-            yoy_pct:
-              metric === "revenue"
-                ? data.yoy_changes.revenue_pct
-                : metric === "net_income"
-                  ? data.yoy_changes.net_income_pct
-                  : null,
+            content: [
+              { type: "text", text: JSON.stringify(normalized, null, 2) },
+            ],
+            structuredContent: normalized,
           };
-        });
+        }
 
-        const output = { metric, results: comparison };
+        if (name === "get_financials_comparison") {
+          const tickers = args?.tickers as string[];
+          const metric = args?.metric as string;
 
-        return {
-          content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
-          structuredContent: output,
-        };
-      }
+          const results = await Promise.allSettled(
+            tickers.map(async (ticker) => {
+              const identifier = ticker.toUpperCase();
+              const cacheKey = `financials:${identifier}:10-K`;
 
-      throw new Error(`Unknown tool: ${name}`);
-    });
+              const cached = await getCache(cacheKey);
+              if (cached) return { ticker: identifier, data: cached };
 
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-  } catch (error) {
-    console.error("MCP error:", error);
-    if (!res.headersSent) {
-      res.status(500).json({
-        jsonrpc: "2.0",
-        error: { code: -32603, message: "Internal server error" },
-        id: null,
+              const rawData = await fetchFinancialReport(identifier);
+              const normalized = normalizeEDGARData(rawData, "10-K");
+              await setCache(cacheKey, normalized, 86400);
+              return { ticker: identifier, data: normalized };
+            }),
+          );
+
+          const comparison = results.map((result, index) => {
+            if (result.status === "rejected") {
+              return {
+                ticker: tickers[index].toUpperCase(),
+                error: result.reason?.message,
+              };
+            }
+
+            const { ticker, data } = result.value;
+            const f = data.financials;
+
+            const valueMap: Record<string, number | null> = {
+              revenue: f.income_statement.revenue,
+              gross_profit: f.income_statement.gross_profit,
+              operating_income: f.income_statement.operating_income,
+              net_income: f.income_statement.net_income,
+              total_assets: f.balance_sheet.total_assets,
+              total_liabilities: f.balance_sheet.total_liabilities,
+              total_equity: f.balance_sheet.total_equity,
+              operating_cash_flow: f.cash_flow.operating_cash_flow,
+              free_cash_flow: f.cash_flow.free_cash_flow,
+            };
+
+            return {
+              ticker,
+              company: data.company,
+              cik: data.cik,
+              period: data.period,
+              filing_type: data.filing_type,
+              filed_at: data.filed_at,
+              currency: data.currency,
+              metric,
+              value: valueMap[metric] ?? null,
+              yoy_pct:
+                metric === "revenue"
+                  ? data.yoy_changes.revenue_pct
+                  : metric === "net_income"
+                    ? data.yoy_changes.net_income_pct
+                    : null,
+            };
+          });
+
+          const output = { metric, results: comparison };
+
+          return {
+            content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+            structuredContent: output,
+          };
+        }
+
+        throw new Error(`Unknown tool: ${name}`);
       });
+
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+      });
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      console.error("MCP error:", error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: { code: -32603, message: "Internal server error" },
+          id: null,
+        });
+      }
     }
-  }
-});
+  },
+);
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
