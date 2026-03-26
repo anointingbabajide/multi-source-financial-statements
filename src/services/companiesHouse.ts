@@ -1,4 +1,5 @@
 import { pdfToText } from "pdf-ts";
+
 const BASE_URL = "https://api.companieshouse.gov.uk";
 
 const getAuthHeader = (): string => {
@@ -8,18 +9,44 @@ const getAuthHeader = (): string => {
   return `Basic ${Buffer.from(`${apiKey}:`).toString("base64")}`;
 };
 
+const fetchWithTimeout = async (
+  url: string,
+  options: RequestInit = {},
+  ms: number = 15000,
+): Promise<Response> => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ms);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    return response;
+  } catch (error: any) {
+    if (error.name === "AbortError") {
+      throw new Error(`Request timed out after ${ms}ms: ${url}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
 const getCompanyProfile = async (companyNumber: string) => {
-  const response = await fetch(`${BASE_URL}/company/${companyNumber}`, {
-    headers: { Authorization: getAuthHeader() },
-  });
+  const response = await fetchWithTimeout(
+    `${BASE_URL}/company/${companyNumber}`,
+    { headers: { Authorization: getAuthHeader() } },
+    10000,
+  );
   if (!response.ok) throw new Error(`Company not found: ${companyNumber}`);
   return await response.json();
 };
 
 const getFilingHistory = async (companyNumber: string) => {
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `${BASE_URL}/company/${companyNumber}/filing-history?category=accounts&items_per_page=10`,
     { headers: { Authorization: getAuthHeader() } },
+    10000,
   );
   if (!response.ok)
     throw new Error(`Failed to fetch filing history for: ${companyNumber}`);
@@ -27,9 +54,11 @@ const getFilingHistory = async (companyNumber: string) => {
 };
 
 const getDocumentMetadata = async (metadataUrl: string) => {
-  const response = await fetch(metadataUrl, {
-    headers: { Authorization: getAuthHeader() },
-  });
+  const response = await fetchWithTimeout(
+    metadataUrl,
+    { headers: { Authorization: getAuthHeader() } },
+    10000,
+  );
   if (!response.ok)
     throw new Error(`Failed to fetch document metadata from: ${metadataUrl}`);
   const data = await response.json();
@@ -55,9 +84,13 @@ const debugPDFText = async (companyNumber: string) => {
       ? documentUrl
       : `${documentUrl}/content`;
 
-    const response = await fetch(contentUrl, {
-      headers: { Authorization: getAuthHeader(), Accept: "application/pdf" },
-    });
+    const response = await fetchWithTimeout(
+      contentUrl,
+      {
+        headers: { Authorization: getAuthHeader(), Accept: "application/pdf" },
+      },
+      20000,
+    );
 
     if (!response.ok) {
       console.log("Failed to fetch PDF:", response.status);
@@ -79,12 +112,16 @@ const downloadDocument = async (documentUrl: string, acceptHeader: string) => {
     ? documentUrl
     : `${documentUrl}/content`;
 
-  const response = await fetch(contentUrl, {
-    headers: {
-      Authorization: getAuthHeader(),
-      Accept: acceptHeader,
+  const response = await fetchWithTimeout(
+    contentUrl,
+    {
+      headers: {
+        Authorization: getAuthHeader(),
+        Accept: acceptHeader,
+      },
     },
-  });
+    20000, // 20s for document download — iXBRL files can be large
+  );
 
   if (!response.ok)
     throw new Error(`Failed to download document: ${response.status}`);

@@ -9,7 +9,10 @@ import {
 import router from "./src/routes/index";
 import { startCronJob } from "./src/jobs/nightly";
 import { fetchFinancialReport } from "./src/services/edgar";
+import { fetchCompaniesHouseReport } from "./src/services/companiesHouse";
 import { normalizeEDGARData } from "./src/normalizers/edgar";
+import { normalizeCompaniesHouseData } from "./src/normalizers/companiesHouse";
+import { detectSource } from "./src/utils/sourceDetector";
 import { getCache, setCache } from "./src/utils/cache";
 import { createContextMiddleware } from "@ctxprotocol/sdk";
 
@@ -23,18 +26,20 @@ const TOOLS = [
   {
     name: "get_financials",
     description:
-      "Get normalized financial statements for any US public company. Returns balance sheet, income statement, and cash flow data from SEC EDGAR.",
+      "Get normalized financial statements for any US or UK public company. Pass a US stock ticker (e.g. AAPL, TSLA) for SEC EDGAR data, or a UK company registration number (e.g. 00210922) for Companies House data. Auto-detects the source.",
     inputSchema: {
       type: "object",
       properties: {
         ticker: {
           type: "string",
-          description: "Stock ticker e.g. AAPL, MSFT, GOOGL, TSLA",
+          description:
+            "US stock ticker (e.g. AAPL, MSFT, TSLA) or UK company registration number (e.g. 00210922, 08130873)",
         },
         formType: {
           type: "string",
           enum: ["10-K", "10-Q"],
-          description: "10-K for annual, 10-Q for quarterly. Defaults to 10-K",
+          description:
+            "US only: 10-K for annual, 10-Q for quarterly. Defaults to 10-K. Ignored for UK companies.",
         },
       },
       required: ["ticker"],
@@ -177,7 +182,8 @@ app.post(
         if (name === "get_financials") {
           const ticker = (args?.ticker as string).toUpperCase();
           const formType = (args?.formType as string) ?? "10-K";
-          const cacheKey = `financials:${ticker}:${formType}`;
+          const source = detectSource(ticker);
+          const cacheKey = `financials:${ticker}:${source}`;
 
           const cached = await getCache(cacheKey);
           if (cached) {
@@ -189,8 +195,25 @@ app.post(
             };
           }
 
-          const rawData = await fetchFinancialReport(ticker);
-          const normalized = normalizeEDGARData(rawData, formType);
+          let normalized;
+
+          if (source === "SEC_EDGAR") {
+            const rawData = await fetchFinancialReport(ticker);
+            normalized = normalizeEDGARData(rawData, formType);
+          } else if (source === "COMPANIES_HOUSE") {
+            const { profile, iXBRLContent, filedAt } =
+              await fetchCompaniesHouseReport(ticker);
+            normalized = normalizeCompaniesHouseData(
+              profile,
+              iXBRLContent,
+              filedAt,
+            );
+          } else {
+            throw new Error(
+              `Could not detect source for: ${ticker}. Use a US ticker like AAPL or a UK company number like 00102498`,
+            );
+          }
+
           await setCache(cacheKey, normalized, 86400);
 
           return {
@@ -216,6 +239,7 @@ app.post(
               const rawData = await fetchFinancialReport(identifier);
               const normalized = normalizeEDGARData(rawData, "10-K");
               await setCache(cacheKey, normalized, 86400);
+
               return { ticker: identifier, data: normalized };
             }),
           );
@@ -276,6 +300,7 @@ app.post(
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });
+
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
