@@ -1,7 +1,4 @@
 import { pdfToText } from "pdf-ts";
-import { GoogleGenAI } from "@google/genai";
-const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
 const BASE_URL = "https://api.companieshouse.gov.uk";
 
 const getAuthHeader = (): string => {
@@ -96,60 +93,6 @@ const downloadDocument = async (documentUrl: string, acceptHeader: string) => {
   return { content };
 };
 
-const extractFromPDFWithGemini = async (
-  documentUrl: string,
-): Promise<Record<string, number | null>> => {
-  const contentUrl = documentUrl.endsWith("/content")
-    ? documentUrl
-    : `${documentUrl}/content`;
-
-  const response = await fetch(contentUrl, {
-    headers: { Authorization: getAuthHeader(), Accept: "application/pdf" },
-  });
-
-  if (!response.ok)
-    throw new Error(`Failed to download PDF: ${response.status}`);
-
-  const buffer = Buffer.from(await response.arrayBuffer());
-  const base64PDF = buffer.toString("base64");
-
-  const result = await genai.models.generateContent({
-    model: "gemini-2.0-flash",
-    contents: [
-      {
-        parts: [
-          {
-            inlineData: {
-              mimeType: "application/pdf",
-              data: base64PDF,
-            },
-          },
-          {
-            text: `Extract the following financial figures from this UK annual report.
-Return ONLY a valid JSON object with these exact keys, using null if not found.
-All values should be raw numbers (no currency symbols or commas):
-{
-  "revenue": null,
-  "gross_profit": null,
-  "operating_income": null,
-  "net_income": null,
-  "total_assets": null,
-  "total_liabilities": null,
-  "total_equity": null,
-  "operating_cash_flow": null,
-  "capital_expenditure": null
-}`,
-          },
-        ],
-      },
-    ],
-  });
-
-  const text = result.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  const cleaned = text.replace(/```json|```/g, "").trim();
-  return JSON.parse(cleaned);
-};
-
 const fetchCompaniesHouseReport = async (companyNumber: string) => {
   const profile = await getCompanyProfile(companyNumber);
 
@@ -214,15 +157,6 @@ const fetchCompaniesHouseReport = async (companyNumber: string) => {
           profile,
           iXBRLContent: content,
           format: "xbrl",
-          filedAt: filing.date,
-        };
-      } else if (resources["application/pdf"]) {
-        console.log(`Filing ${filing.date}: PDF - extracting with Gemini`);
-        const pdfValues = await extractFromPDFWithGemini(documentUrl);
-        return {
-          profile,
-          iXBRLContent: JSON.stringify(pdfValues),
-          format: "pdf",
           filedAt: filing.date,
         };
       } else {
