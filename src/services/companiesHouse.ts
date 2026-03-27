@@ -120,7 +120,7 @@ const downloadDocument = async (documentUrl: string, acceptHeader: string) => {
         Accept: acceptHeader,
       },
     },
-    20000, // 20s for document download — iXBRL files can be large
+    20000, // 20s for document download
   );
 
   if (!response.ok)
@@ -132,18 +132,23 @@ const downloadDocument = async (documentUrl: string, acceptHeader: string) => {
 
 const fetchCompaniesHouseReport = async (companyNumber: string) => {
   const profile = await getCompanyProfile(companyNumber);
-
   const filingHistory = await getFilingHistory(companyNumber);
   if (!filingHistory.items || filingHistory.items.length === 0) {
     throw new Error(`No filings found for company: ${companyNumber}`);
   }
 
-  const annualAccountsList = filingHistory.items.filter(
-    (item: any) =>
-      item.type === "AA" ||
-      item.type === "ACCOUNTS TYPE GROUP" ||
-      item.description?.toLowerCase().includes("annual"),
-  );
+  const annualAccountsList = filingHistory.items
+    .filter(
+      (item: any) =>
+        item.type === "AA" ||
+        item.type === "ACCOUNTS TYPE GROUP" ||
+        item.description?.toLowerCase().includes("annual"),
+    )
+    // Sort by date descending - most recent first
+    .sort(
+      (a: any, b: any) =>
+        new Date(b.date).getTime() - new Date(a.date).getTime(),
+    );
 
   if (annualAccountsList.length === 0) {
     throw new Error(`No annual accounts found for: ${companyNumber}`);
@@ -153,11 +158,9 @@ const fetchCompaniesHouseReport = async (companyNumber: string) => {
     try {
       const metadataUrl = filing.links?.document_metadata;
       if (!metadataUrl) continue;
-
       const metadata = await getDocumentMetadata(metadataUrl);
       const documentUrl = metadata?.links?.document;
       if (!documentUrl) continue;
-
       const resources = metadata?.resources || {};
       console.log(
         "Available formats for",
@@ -165,7 +168,6 @@ const fetchCompaniesHouseReport = async (companyNumber: string) => {
         ":",
         Object.keys(resources),
       );
-
       if (resources["application/xhtml+xml"]) {
         const { content } = await downloadDocument(
           documentUrl,
