@@ -162,12 +162,12 @@ const fetchCompaniesHouseReport = async (companyNumber: string) => {
       const documentUrl = metadata?.links?.document;
       if (!documentUrl) continue;
       const resources = metadata?.resources || {};
-      console.log(
-        "Available formats for",
-        filing.date,
-        ":",
-        Object.keys(resources),
-      );
+      // console.log(
+      //   "Available formats for",
+      //   filing.date,
+      //   ":",
+      //   Object.keys(resources),
+      // );
       if (resources["application/xhtml+xml"]) {
         const { content } = await downloadDocument(
           documentUrl,

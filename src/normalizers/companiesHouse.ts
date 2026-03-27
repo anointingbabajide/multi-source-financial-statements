@@ -168,13 +168,16 @@ const normalizeCompaniesHouseData = (
   filedAt: string,
 ): FinancialStatement => {
   const values = extractXBRLValues(iXBRLContent);
-
   const operatingCashFlow = values["operating_cash_flow"] ?? null;
   const capitalExpenditure = values["capital_expenditure"] ?? null;
   const freeCashFlow =
     operatingCashFlow && capitalExpenditure
       ? operatingCashFlow - capitalExpenditure
       : null;
+
+  const filingYear = new Date(filedAt).getFullYear();
+  const currentYear = new Date().getFullYear();
+  const isStale = currentYear - filingYear > 1;
 
   return {
     company: profile?.company_name ?? "Unknown",
@@ -183,6 +186,9 @@ const normalizeCompaniesHouseData = (
     period: filedAt ?? "",
     filing_type: "Annual Accounts",
     filed_at: filedAt ?? "",
+    data_note: isStale
+      ? "Most recent structured iXBRL filing available. This company may have switched to PDF-only filing for more recent accounts."
+      : undefined,
     financials: {
       income_statement: {
         revenue: values["revenue"] ?? null,

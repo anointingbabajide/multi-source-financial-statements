@@ -5,6 +5,7 @@ export interface FinancialStatement {
   period: string;
   filing_type: string;
   filed_at: string;
+  data_note?: string;
   financials: {
     income_statement: {
       revenue: number | null;
@@ -27,4 +28,13 @@ export interface FinancialStatement {
     revenue_pct: number | null;
     net_income_pct: number | null;
   };
+}
+
+export interface JobStats {
+  startedAt: string;
+  completedAt: string | null;
+  total: number;
+  succeeded: number;
+  failed: number;
+  failedTickers: string[];
 }
