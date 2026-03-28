@@ -9,9 +9,15 @@ import {
 import router from "./src/routes/index";
 import { startCronJob } from "./src/jobs/nightly";
 import { fetchFinancialReport } from "./src/services/edgar";
-import { fetchCompaniesHouseReport } from "./src/services/companiesHouse";
+import {
+  fetchUKCompanyReport,
+  fetchYahooFinanceReport,
+} from "./src/services/companiesHouse";
 import { normalizeEDGARData } from "./src/normalizers/edgar";
-import { normalizeCompaniesHouseData } from "./src/normalizers/companiesHouse";
+import {
+  normalizeCompaniesHouseData,
+  normalizeYahooFinanceData,
+} from "./src/normalizers/companiesHouse";
 import { detectSource } from "./src/utils/sourceDetector";
 import { getCache, setCache } from "./src/utils/cache";
 import { createContextMiddleware } from "@ctxprotocol/sdk";
@@ -26,20 +32,25 @@ const TOOLS = [
   {
     name: "get_financials",
     description:
-      "Get normalized financial statements for any US or UK public company. Pass a US stock ticker (e.g. AAPL, TSLA) for SEC EDGAR data, or a UK company registration number (e.g. 00210922) for Companies House data. Auto-detects the source.",
+      "Get normalized financial statements for any US or UK public company. Pass a US stock ticker (e.g. AAPL, TSLA) for SEC EDGAR data, a UK company registration number (e.g. 00210922) for Companies House data, or a Yahoo Finance ticker (e.g. TSCO.L, ULVR.L) for UK listed companies that only file scanned PDFs on Companies House.",
     inputSchema: {
       type: "object",
       properties: {
         ticker: {
           type: "string",
           description:
-            "US stock ticker (e.g. AAPL, MSFT, TSLA) or UK company registration number (e.g. 00210922, 08130873)",
+            "US stock ticker (e.g. AAPL, MSFT), UK company registration number (e.g. 00210922), or Yahoo Finance ticker for UK listed companies (e.g. TSCO.L, ULVR.L)",
         },
         formType: {
           type: "string",
           enum: ["10-K", "10-Q"],
           description:
             "US only: 10-K for annual, 10-Q for quarterly. Defaults to 10-K. Ignored for UK companies.",
+        },
+        yahooTicker: {
+          type: "string",
+          description:
+            "Optional Yahoo Finance ticker to use as fallback if the UK company number only has scanned PDF filings (e.g. TSCO.L for Tesco, ULVR.L for Unilever)",
         },
       },
       required: ["ticker"],
@@ -53,6 +64,7 @@ const TOOLS = [
         period: { type: "string" },
         filing_type: { type: "string" },
         filed_at: { type: "string" },
+        data_note: { type: "string" },
         financials: {
           type: "object",
           properties: {
@@ -182,6 +194,7 @@ app.post(
         if (name === "get_financials") {
           const ticker = (args?.ticker as string).toUpperCase();
           const formType = (args?.formType as string) ?? "10-K";
+          const yahooTicker = args?.yahooTicker as string | undefined;
           const source = detectSource(ticker);
           const cacheKey = `financials:${ticker}:${source}`;
 
@@ -201,16 +214,23 @@ app.post(
             const rawData = await fetchFinancialReport(ticker);
             normalized = normalizeEDGARData(rawData, formType);
           } else if (source === "COMPANIES_HOUSE") {
-            const { profile, iXBRLContent, filedAt } =
-              await fetchCompaniesHouseReport(ticker);
-            normalized = normalizeCompaniesHouseData(
-              profile,
-              iXBRLContent,
-              filedAt,
-            );
+            const report = await fetchUKCompanyReport(ticker, yahooTicker);
+            if (report.source === "yahoo_finance") {
+              normalized = normalizeYahooFinanceData(ticker, report);
+            } else {
+              const { profile, iXBRLContent, filedAt } = report as any;
+              normalized = normalizeCompaniesHouseData(
+                profile,
+                iXBRLContent,
+                filedAt,
+              );
+            }
+          } else if (source === "YAHOO_FINANCE") {
+            const report = await fetchYahooFinanceReport(ticker);
+            normalized = normalizeYahooFinanceData(ticker, report);
           } else {
             throw new Error(
-              `Could not detect source for: ${ticker}. Use a US ticker like AAPL or a UK company number like 00102498`,
+              `Could not detect source for: ${ticker}. Use a US ticker (AAPL), UK company number (00102498), or Yahoo Finance ticker (TSCO.L)`,
             );
           }
 

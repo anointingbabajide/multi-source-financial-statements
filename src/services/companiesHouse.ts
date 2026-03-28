@@ -1,5 +1,7 @@
 import { pdfToText } from "pdf-ts";
+import YahooFinance from "yahoo-finance2";
 
+const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 const BASE_URL = "https://api.companieshouse.gov.uk";
 
 const getAuthHeader = (): string => {
@@ -213,4 +215,76 @@ const fetchCompaniesHouseReport = async (companyNumber: string) => {
   );
 };
 
-export { fetchCompaniesHouseReport, debugPDFText };
+const fetchYahooFinanceReport = async (ticker: string) => {
+  console.log(`Fetching Yahoo Finance data for ${ticker}`);
+  const result = await yahooFinance.quoteSummary(ticker, {
+    modules: [
+      "incomeStatementHistory",
+      "cashflowStatementHistory",
+      "financialData",
+      "defaultKeyStatistics",
+      "quoteType",
+    ],
+  });
+
+  const income = result.incomeStatementHistory?.incomeStatementHistory?.[0];
+  const financial = result.financialData;
+  const quoteType = (result as any).quoteType;
+
+  return {
+    company: quoteType?.longName ?? quoteType?.shortName ?? ticker,
+    iXBRLContent: JSON.stringify({
+      revenue: income?.totalRevenue ?? financial?.totalRevenue ?? null,
+      gross_profit: financial?.grossProfits ?? null,
+      operating_income: financial?.ebitda ?? null,
+      net_income: income?.netIncome ?? null,
+      total_assets: null,
+      total_liabilities: financial?.totalDebt ?? null,
+      total_equity: null,
+      operating_cash_flow: financial?.operatingCashflow ?? null,
+      capital_expenditure: null,
+      free_cash_flow: financial?.freeCashflow ?? null,
+    }),
+    format: "yahoo",
+    filedAt:
+      income?.endDate?.toISOString().split("T")[0] ??
+      new Date().toISOString().split("T")[0],
+    currency: financial?.financialCurrency ?? "USD",
+  };
+};
+
+const fetchUKCompanyReport = async (companyNumber: string, ticker?: string) => {
+  const isPDFOnlyError = (message: string) =>
+    message.includes("scanned PDFs") || message.includes("No structured iXBRL");
+
+  try {
+    const report = await fetchCompaniesHouseReport(companyNumber);
+    return { ...report, source: "companies_house" };
+  } catch (chError: any) {
+    console.log(
+      `Companies House failed for ${companyNumber}:`,
+      chError.message,
+    );
+
+    if (!isPDFOnlyError(chError.message)) {
+      throw chError;
+    } else if (!ticker) {
+      throw new Error(
+        `No structured iXBRL filing found for company: ${companyNumber}. ` +
+          `This company may only file scanned PDFs. ` +
+          `If this is a listed company, provide its stock ticker (e.g. TSCO.L for Tesco) to fetch from Yahoo Finance.`,
+      );
+    } else {
+      console.log(`Falling back to Yahoo Finance for ticker: ${ticker}`);
+      const report = await fetchYahooFinanceReport(ticker);
+      return { ...report, source: "yahoo_finance" };
+    }
+  }
+};
+
+export {
+  fetchCompaniesHouseReport,
+  fetchYahooFinanceReport,
+  fetchUKCompanyReport,
+  debugPDFText,
+};

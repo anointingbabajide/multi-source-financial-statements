@@ -214,4 +214,46 @@ const normalizeCompaniesHouseData = (
   };
 };
 
-export { normalizeCompaniesHouseData };
+const normalizeYahooFinanceData = (
+  ticker: string,
+  rawData: any,
+): FinancialStatement => {
+  const values = JSON.parse(rawData.iXBRLContent);
+
+  const operatingCashFlow = values.operating_cash_flow ?? null;
+  const capitalExpenditure = values.capital_expenditure ?? null;
+  const freeCashFlow = values.free_cash_flow ?? null;
+
+  return {
+    company: rawData.company,
+    cik: ticker,
+    currency: rawData.currency ?? "GBP",
+    period: rawData.filedAt ?? "",
+    filing_type: "Annual Accounts",
+    filed_at: rawData.filedAt ?? "",
+    financials: {
+      income_statement: {
+        revenue: values.revenue ?? null,
+        gross_profit: values.gross_profit ?? null,
+        operating_income: values.operating_income ?? null,
+        net_income: values.net_income ?? null,
+      },
+      balance_sheet: {
+        total_assets: values.total_assets ?? null,
+        total_liabilities: values.total_liabilities ?? null,
+        total_equity: values.total_equity ?? null,
+      },
+      cash_flow: {
+        operating_cash_flow: operatingCashFlow,
+        capital_expenditure: capitalExpenditure,
+        free_cash_flow: freeCashFlow,
+      },
+    },
+    yoy_changes: {
+      revenue_pct: null,
+      net_income_pct: null,
+    },
+  };
+};
+
+export { normalizeCompaniesHouseData, normalizeYahooFinanceData };
