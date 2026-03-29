@@ -224,6 +224,9 @@ const normalizeYahooFinanceData = (
   const capitalExpenditure = values.capital_expenditure ?? null;
   const freeCashFlow = values.free_cash_flow ?? null;
 
+  console.log("Revenue PCT:", values.revenue_pct);
+  console.log("NET INCOME PCT:", values.net_income_pct);
+
   return {
     company: rawData.company,
     cik: ticker,
@@ -250,8 +253,8 @@ const normalizeYahooFinanceData = (
       },
     },
     yoy_changes: {
-      revenue_pct: null,
-      net_income_pct: null,
+      revenue_pct: values.revenue_pct ?? null,
+      net_income_pct: values.net_income_pct ?? null,
     },
   };
 };

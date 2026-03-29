@@ -227,27 +227,84 @@ const fetchYahooFinanceReport = async (ticker: string) => {
     ],
   });
 
-  const income = result.incomeStatementHistory?.incomeStatementHistory?.[0];
+  const income = result.incomeStatementHistory?.incomeStatementHistory ?? [];
   const financial = result.financialData;
   const quoteType = (result as any).quoteType;
+
+  const currentIncome = income[0];
+  const priorIncome = income[1];
+
+  // Derive equity and assets from debtToEquity ratio
+  const totalDebt = financial?.totalDebt ?? null;
+  const debtToEquity = financial?.debtToEquity ?? null;
+  const totalEquity =
+    totalDebt && debtToEquity ? totalDebt / (debtToEquity / 100) : null;
+  const totalAssets = totalDebt && totalEquity ? totalDebt + totalEquity : null;
+
+  // Derive capex from free cash flow and operating cash flow
+  const operatingCashFlow = financial?.operatingCashflow ?? null;
+  const freeCashFlow = financial?.freeCashflow ?? null;
+  const capitalExpenditure =
+    operatingCashFlow && freeCashFlow
+      ? Math.abs(freeCashFlow - operatingCashFlow)
+      : null;
+
+  // Calculate YoY
+  const currentRevenue = currentIncome?.totalRevenue ?? null;
+  const priorRevenue = priorIncome?.totalRevenue ?? null;
+  const revenuePct =
+    currentRevenue && priorRevenue
+      ? parseFloat(
+          (((currentRevenue - priorRevenue) / priorRevenue) * 100).toFixed(2),
+        )
+      : null;
+
+  const currentNetIncome = currentIncome?.netIncome ?? null;
+  const priorNetIncome = priorIncome?.netIncome ?? null;
+  const netIncomePct =
+    currentNetIncome && priorNetIncome
+      ? parseFloat(
+          (
+            ((currentNetIncome - priorNetIncome) / priorNetIncome) *
+            100
+          ).toFixed(2),
+        )
+      : null;
+
+  // console.log("currentRevenue:", currentRevenue);
+  // console.log("priorRevenue:", priorRevenue);
+  // console.log("revenuePct:", revenuePct);
+  // console.log("income array length:", income.length);
+  // console.log("debtToEquity:", debtToEquity);
+  // console.log("totalDebt:", totalDebt);
+  // console.log("totalEquity:", totalEquity);
+  // console.log("totalAssets:", totalAssets);
+  // console.log("currentRevenue:", currentRevenue);
+  // console.log("priorRevenue:", priorRevenue);
+  // console.log("revenuePct:", revenuePct);
+  // console.log("currentNetIncome:", currentNetIncome);
+  // console.log("priorNetIncome:", priorNetIncome);
+  // console.log("netIncomePct:", netIncomePct);
 
   return {
     company: quoteType?.longName ?? quoteType?.shortName ?? ticker,
     iXBRLContent: JSON.stringify({
-      revenue: income?.totalRevenue ?? financial?.totalRevenue ?? null,
+      revenue: currentRevenue ?? financial?.totalRevenue ?? null,
       gross_profit: financial?.grossProfits ?? null,
       operating_income: financial?.ebitda ?? null,
-      net_income: income?.netIncome ?? null,
-      total_assets: null,
-      total_liabilities: financial?.totalDebt ?? null,
-      total_equity: null,
-      operating_cash_flow: financial?.operatingCashflow ?? null,
-      capital_expenditure: null,
-      free_cash_flow: financial?.freeCashflow ?? null,
+      net_income: currentNetIncome ?? null,
+      total_assets: totalAssets,
+      total_liabilities: totalDebt,
+      total_equity: totalEquity,
+      operating_cash_flow: operatingCashFlow,
+      capital_expenditure: capitalExpenditure,
+      free_cash_flow: freeCashFlow,
+      revenue_pct: revenuePct,
+      net_income_pct: netIncomePct,
     }),
     format: "yahoo",
     filedAt:
-      income?.endDate?.toISOString().split("T")[0] ??
+      currentIncome?.endDate?.toISOString().split("T")[0] ??
       new Date().toISOString().split("T")[0],
     currency: financial?.financialCurrency ?? "USD",
   };
