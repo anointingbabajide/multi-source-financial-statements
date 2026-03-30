@@ -1,11 +1,13 @@
 export interface FinancialStatement {
   company: string;
-  cik: string;
+  ticker: string;
   currency: string;
-  period: string;
-  filing_type: string;
-  filed_at: string;
+  period_end: string;
+  data_type: "official_filing" | "estimated" | "mixed";
+  filing_type?: string;
+  filed_at?: string | null;
   data_note?: string;
+  confidence_score?: number; // 0.0–1.0
   financials: {
     income_statement: {
       revenue: number | null;
@@ -28,6 +30,12 @@ export interface FinancialStatement {
     revenue_pct: number | null;
     net_income_pct: number | null;
   };
+}
+
+export interface FinancialResponse {
+  success: boolean;
+  source: "sec_edgar" | "companies_house" | "yahoo_finance";
+  data: FinancialStatement;
 }
 
 export interface JobStats {

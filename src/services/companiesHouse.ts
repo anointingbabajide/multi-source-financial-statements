@@ -4,6 +4,19 @@ import YahooFinance from "yahoo-finance2";
 const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 const BASE_URL = "https://api.companieshouse.gov.uk";
 
+const TIMESERIES_FIELDS = [
+  "annualTotalRevenue",
+  "annualGrossProfit",
+  "annualOperatingIncome",
+  "annualNetIncome",
+  "annualTotalAssets",
+  "annualTotalLiabilitiesNetMinorityInterest",
+  "annualStockholdersEquity",
+  "annualOperatingCashFlow",
+  "annualCapitalExpenditure",
+  "annualFreeCashFlow",
+].join(",");
+
 const getAuthHeader = (): string => {
   const apiKey = process.env.COMPANIES_HOUSE_API_KEY;
   if (!apiKey)
@@ -215,52 +228,101 @@ const fetchCompaniesHouseReport = async (companyNumber: string) => {
   );
 };
 
+const fetchFundamentalsTimeSeries = async (
+  ticker: string,
+): Promise<Record<string, any[]>> => {
+  const period1 = 1420070400;
+  const period2 = Math.floor(Date.now() / 1000);
+  const url =
+    `https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/${ticker}` +
+    `?symbol=${ticker}&type=${TIMESERIES_FIELDS}&period1=${period1}&period2=${period2}`;
+
+  const response = await fetchWithTimeout(
+    url,
+    { headers: { "User-Agent": "Mozilla/5.0" } },
+    15000,
+  );
+  if (!response.ok)
+    throw new Error(`Timeseries fetch failed: ${response.status}`);
+
+  const json = await response.json();
+  const result: Record<string, any[]> = {};
+  for (const item of json?.timeseries?.result ?? []) {
+    const key = item.meta?.type?.[0];
+    if (key) result[key] = item[key] ?? [];
+  }
+  return result;
+};
+
 const fetchYahooFinanceReport = async (ticker: string) => {
   console.log(`Fetching Yahoo Finance data for ${ticker}`);
-  const result = await yahooFinance.quoteSummary(ticker, {
-    modules: [
-      "incomeStatementHistory",
-      "cashflowStatementHistory",
-      "financialData",
-      "defaultKeyStatistics",
-      "quoteType",
-    ],
-  });
 
-  const income = result.incomeStatementHistory?.incomeStatementHistory ?? [];
-  const financial = result.financialData;
-  const quoteType = (result as any).quoteType;
+  const [summary, timeseries] = await Promise.all([
+    yahooFinance.quoteSummary(ticker, {
+      modules: ["financialData", "quoteType"],
+    }),
+    fetchFundamentalsTimeSeries(ticker),
+  ]);
 
-  const currentIncome = income[0];
-  const priorIncome = income[1];
+  const financial = summary.financialData;
+  const quoteType = (summary as any).quoteType;
 
-  // Derive equity and assets from debtToEquity ratio
-  const totalDebt = financial?.totalDebt ?? null;
-  const debtToEquity = financial?.debtToEquity ?? null;
-  const totalEquity =
-    totalDebt && debtToEquity ? totalDebt / (debtToEquity / 100) : null;
-  const totalAssets = totalDebt && totalEquity ? totalDebt + totalEquity : null;
+  // Gets the most recent entry's value for a given timeseries key
+  const latest = (key: string): number | null => {
+    const series = timeseries[key];
+    if (!series || series.length === 0) return null;
+    return series[series.length - 1]?.reportedValue?.raw ?? null;
+  };
 
-  // Derive capex from free cash flow and operating cash flow
-  const operatingCashFlow = financial?.operatingCashflow ?? null;
-  const freeCashFlow = financial?.freeCashflow ?? null;
-  const capitalExpenditure =
-    operatingCashFlow && freeCashFlow
-      ? Math.abs(freeCashFlow - operatingCashFlow)
-      : null;
+  // Gets the prior year entry's value
+  const prior = (key: string): number | null => {
+    const series = timeseries[key];
+    if (!series || series.length < 2) return null;
+    return series[series.length - 2]?.reportedValue?.raw ?? null;
+  };
 
-  // Calculate YoY
-  const currentRevenue = currentIncome?.totalRevenue ?? null;
-  const priorRevenue = priorIncome?.totalRevenue ?? null;
+  // asOfDate is already a plain "YYYY-MM-DD" string in the timeseries response
+  const latestEntry = (key: string): any | null => {
+    const series = timeseries[key];
+    if (!series || series.length === 0) return null;
+    return series[series.length - 1] ?? null;
+  };
+
+  const revenueEntry = latestEntry("annualTotalRevenue");
+
+  // filed_at: use asOfDate directly — it's already "YYYY-MM-DD", no conversion needed
+  const filedAt: string =
+    revenueEntry?.asOfDate ?? new Date().toISOString().split("T")[0];
+
+  // currency: prefer timeseries currencyCode over financialData.financialCurrency
+  // because financialCurrency can return "USD" for dual-listed UK stocks
+  const currency: string =
+    revenueEntry?.currencyCode ?? financial?.financialCurrency ?? "GBP";
+
+  // Income statement
+  const currentRevenue = latest("annualTotalRevenue");
+  const priorRevenue = prior("annualTotalRevenue");
+  const currentNetIncome = latest("annualNetIncome");
+  const priorNetIncome = prior("annualNetIncome");
+
+  // Cash flow — capex is negative in timeseries (cash outflow), normalise to positive
+  const operatingCashFlow =
+    latest("annualOperatingCashFlow") ?? financial?.operatingCashflow ?? null;
+  const rawCapex = latest("annualCapitalExpenditure");
+  const capitalExpenditure = rawCapex != null ? Math.abs(rawCapex) : null;
+  const freeCashFlow =
+    latest("annualFreeCashFlow") ??
+    (operatingCashFlow != null && capitalExpenditure != null
+      ? operatingCashFlow - capitalExpenditure
+      : (financial?.freeCashflow ?? null));
+
+  // YoY changes
   const revenuePct =
     currentRevenue && priorRevenue
       ? parseFloat(
           (((currentRevenue - priorRevenue) / priorRevenue) * 100).toFixed(2),
         )
       : null;
-
-  const currentNetIncome = currentIncome?.netIncome ?? null;
-  const priorNetIncome = priorIncome?.netIncome ?? null;
   const netIncomePct =
     currentNetIncome && priorNetIncome
       ? parseFloat(
@@ -271,31 +333,18 @@ const fetchYahooFinanceReport = async (ticker: string) => {
         )
       : null;
 
-  // console.log("currentRevenue:", currentRevenue);
-  // console.log("priorRevenue:", priorRevenue);
-  // console.log("revenuePct:", revenuePct);
-  // console.log("income array length:", income.length);
-  // console.log("debtToEquity:", debtToEquity);
-  // console.log("totalDebt:", totalDebt);
-  // console.log("totalEquity:", totalEquity);
-  // console.log("totalAssets:", totalAssets);
-  // console.log("currentRevenue:", currentRevenue);
-  // console.log("priorRevenue:", priorRevenue);
-  // console.log("revenuePct:", revenuePct);
-  // console.log("currentNetIncome:", currentNetIncome);
-  // console.log("priorNetIncome:", priorNetIncome);
-  // console.log("netIncomePct:", netIncomePct);
-
   return {
     company: quoteType?.longName ?? quoteType?.shortName ?? ticker,
     iXBRLContent: JSON.stringify({
       revenue: currentRevenue ?? financial?.totalRevenue ?? null,
-      gross_profit: financial?.grossProfits ?? null,
-      operating_income: financial?.ebitda ?? null,
+      gross_profit:
+        latest("annualGrossProfit") ?? financial?.grossProfits ?? null,
+      operating_income: latest("annualOperatingIncome") ?? null,
       net_income: currentNetIncome ?? null,
-      total_assets: totalAssets,
-      total_liabilities: totalDebt,
-      total_equity: totalEquity,
+      total_assets: latest("annualTotalAssets") ?? null,
+      total_liabilities:
+        latest("annualTotalLiabilitiesNetMinorityInterest") ?? null,
+      total_equity: latest("annualStockholdersEquity") ?? null,
       operating_cash_flow: operatingCashFlow,
       capital_expenditure: capitalExpenditure,
       free_cash_flow: freeCashFlow,
@@ -303,10 +352,8 @@ const fetchYahooFinanceReport = async (ticker: string) => {
       net_income_pct: netIncomePct,
     }),
     format: "yahoo",
-    filedAt:
-      currentIncome?.endDate?.toISOString().split("T")[0] ??
-      new Date().toISOString().split("T")[0],
-    currency: financial?.financialCurrency ?? "USD",
+    filedAt,
+    currency,
   };
 };
 
